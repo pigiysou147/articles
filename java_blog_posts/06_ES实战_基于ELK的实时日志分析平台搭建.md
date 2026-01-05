@@ -2,7 +2,7 @@
 
 ## 背景
 传统的排查方式是 SSH 登服务器，用 `grep` 查日志。微服务架构下，一个请求经过几十个服务，几十个实例，根本没法查。
-我们需要一套**集中式日志系统**。ELK (Elasticsearch, Logstash, Kibana) 是业界的标准答案。
+企业通常需要一套**集中式日志系统**。ELK (Elasticsearch, Logstash, Kibana) 是业界的标准答案。
 
 ## 1. 架构演进
 

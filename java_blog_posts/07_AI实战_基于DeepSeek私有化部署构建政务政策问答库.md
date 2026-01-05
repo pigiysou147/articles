@@ -29,13 +29,13 @@ ollama run deepseek-coder:6.7b
 
 ## 3. RAG 核心架构：Spring AI + Vector Store
 
-为了让 AI 懂我们的“红头文件”，我们需要搭建 RAG 链路。
+为了让 AI 理解政策文件，我们需要搭建 RAG 链路。
 
 ### 3.1 架构图
 `公文PDF` -> `ETL(文本提取)` -> `Embedding(向量化)` -> `Milvus(向量库)` -> `检索(Search)` -> `LLM(DeepSeek)` -> `答案`
 
 ### 3.2 向量数据库选型
-政务场景推荐使用 **Milvus** 或 **PostgreSQL (pgvector)**。
+在政务场景下，通常推荐使用 **Milvus** 或 **PostgreSQL (pgvector)**。
 这里以 Milvus 为例，它支持分布式部署，稳定性高。
 
 ### 3.3 代码实现 (Spring AI)
@@ -84,7 +84,7 @@ public String askPolicy(String question) {
 }
 ```
 
-## 4. 优化实战经验
+## 4. 常见的优化策略
 
 1.  **PDF 表格解析**: 政务公文中包含大量表格，普通的 PDF 解析器会乱码。建议使用 **OCR** (如 PaddleOCR) 专门处理表格区域。
 2.  **切片策略**: 简单的按字符切分会打断语义。建议按“章节”或“条款”切分（正则匹配 `第一条`、`1.1` 等）。

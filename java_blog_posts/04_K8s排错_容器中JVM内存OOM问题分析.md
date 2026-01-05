@@ -1,7 +1,7 @@
 # K8s 排错：容器中 JVM 内存 OOM 问题分析
 
 ## 现象
-线上的 Java 服务运行在 Kubernetes Pod 中，最近偶尔会收到 Pod 重启的报警（OOMKilled）。
+当 Java 服务运行在 Kubernetes Pod 中时，运维监控可能会收到 Pod 重启的报警（OOMKilled）。
 查看 Grafana 监控，发现堆内存（Heap）并没有满，但 Pod 内存占用率却一直飙升直到被 Kill。
 
 ## 1. 容器视角的 OOM vs JVM 视角的 OOM
@@ -20,7 +20,7 @@
 4.  **Code Cache**: JIT 编译后的代码。
 
 ### 2.2 案例分析：JVM 参数配置失误
-查看我们的 Dockerfile，发现启动参数如下：
+常见的一个误区是 Dockerfile 启动参数配置失误，例如：
 ```bash
 java -Xmx2G -jar app.jar
 ```

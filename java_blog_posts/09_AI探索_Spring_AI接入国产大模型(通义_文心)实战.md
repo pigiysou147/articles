@@ -2,7 +2,7 @@
 
 ## 背景
 随着 Spring AI 的发布，Java 终于有了官方的 AI 应用开发框架。但官方原生主要支持 OpenAI、Azure 等海外模型。
-在国内政务和信创项目中，我们必须对接国产大模型，如**阿里通义千问 (Qwen)** 或 **百度文心一言 (Ernie)**。
+在国内政务和信创项目中，通常要求对接国产大模型，如**阿里通义千问 (Qwen)** 或 **百度文心一言 (Ernie)**。
 好消息是，Spring AI Alibaba 等社区项目已经跟进，让我们能以标准化的方式接入国产模型。
 
 ## 1. 选型：Spring AI Alibaba
@@ -56,7 +56,7 @@ public class GovAssistantController {
 ```
 
 ## 3. 对接百度文心一言 (Ernie Bot)
-如果项目指定使用百度文心一言，虽然目前没有官方 Starter，但我们可以利用 Spring AI 的 **OpenAI 兼容模式**，或者自定义 `ChatModel`。
+如果需要使用百度文心一言，虽然目前没有官方 Starter，但我们可以利用 Spring AI 的 **OpenAI 兼容模式**，或者自定义 `ChatModel`。
 目前文心一言推出了兼容 OpenAI 协议的接口（千帆平台），这让接入变得异常简单。
 
 ### 3.1 配置 Base URL
