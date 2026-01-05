@@ -1,94 +1,49 @@
-# AI 实战：基于 DeepSeek 私有化部署构建政务政策问答库
+# AI 实战：从量化原理到 HNSW——构建私有化知识库的硬核技术
 
 ## 背景
-国内政务项目对数据安全有着极高的要求，“数据不出域”是底线。因此，SaaS 类的 AI 服务（如 ChatGPT、文心一言公有云版）通常无法直接用于处理涉密或敏感的内部公文。
-但业务部门又迫切希望利用 AI 技术实现“政策文件智能问答”。本文将介绍如何利用国产开源模型 **DeepSeek (深度求索)** 配合 **Ollama** 实现完全离线的 RAG（检索增强生成）系统。
+在政务或金融等敏感领域，“数据不出域”是死命令。这意味着我们无法使用云端的 GPT-4，必须在本地部署 LLM。
+但这不仅是运行一个 Docker 容器那么简单。如何在有限的显存下跑大模型？如何让检索速度在百万级文档中达到毫秒级？本文将深入探讨 **GGUF 量化**、**HNSW 索引算法** 等底层技术。
 
-## 1. 为什么选择 DeepSeek + Ollama？
+## 1. 显存的魔法：模型量化 (Quantization)
+DeepSeek-Coder-V2 有 236B 参数，即使是 Lite 版也有 16B。如果使用 FP16 (半精度浮点数) 加载，16B 模型需要 $16 \times 10^9 \times 2 \text{Bytes} \approx 32 \text{GB}$ 显存。这超过了单张消费级显卡（如 RTX 4090 24G）的极限。
 
-*   **国产之光 DeepSeek-Coder-V2**: DeepSeek 在中文理解和逻辑推理能力上表现优异，且开源了权重，允许商用。
-*   **Ollama**: 一个极其轻量级的 LLM 运行框架，支持一键本地启动模型，提供兼容 OpenAI 格式的 API。
-*   **纯内网环境**: 不需要访问外网，所有推理都在本地服务器（GPU/CPU）完成。
+### 1.1 GGUF 格式与 k-Quantization
+我们使用的 `.gguf` 文件，通常采用了 **4-bit 量化 (Q4_K_M)**。
+**技术细节**：
+传统的 FP16 每个权重占 16 bits。Int4 量化将其压缩到 4 bits。
+这不仅仅是截断。现代量化算法（如 GPTQ 或 AWQ）会计算权重的重要性（Hessian Matrix），保留关键权重的精度，压缩不重要的权重。
+结果：16B 模型仅需 ~10GB 显存，且精度损失极小（Perplexity 仅增加 1%-2%）。
 
-## 2. 环境搭建 (CentOS 7/Ubuntu)
+## 2. 向量检索的内核：HNSW 算法
+RAG 的核心是向量检索。在 Milvus 或 Chroma 中，最常用的索引类型是 **HNSW (Hierarchical Navigable Small World)**。
 
-### 2.1 部署 Ollama
-在内网服务器上（建议配置 Nvidia 显卡，如 T4 或 A10）：
-```bash
-# 如果无法联网，需下载离线安装包
-curl -fsSL https://ollama.com/install.sh | sh
-```
+### 2.2 为什么不用暴力搜索？
+暴力搜索 (Flat Search) 需要计算 Query 向量与库中 100 万个向量的余弦相似度，复杂度 $O(N)$。
+HNSW 是一种基于图的近似最近邻搜索 (ANN) 算法。
+**原理**：
+它构建了一个**多层图结构**，类似于跳表 (Skip List)。
+1.  Top Layer: 稀疏节点，用于快速定位大概区域。
+2.  Bottom Layer: 全量节点，用于精细查找。
+搜索过程就像“坐高铁再换地铁”，复杂度降低到 $O(\log N)$。
+**Trade-off**：HNSW 极其消耗内存，因为它需要存储图的邻接表关系。对于政务海量文档场景，需要权衡内存成本。
 
-### 2.2 加载模型
-我们需要提前在有网环境下载好模型文件（`.gguf` 格式），然后传输到内网。
-```bash
-# 启动 DeepSeek 7B 版本（适合显存 16G 左右的机器）
-ollama run deepseek-coder:6.7b
-```
-启动成功后，Ollama 会在 `localhost:11434` 监听。
+## 3. RAG 系统的上下文窗口管理
+DeepSeek-Coder 支持 128k Context Window，但这并不意味着我们可以无脑塞入整本书。
+**KV Cache 瓶颈**：
+推理时，显存不仅存权重，还要存 KV Cache（Key-Value Cache，用于加速 Attention 计算）。Sequence Length 越长，KV Cache 越大，推理速度越慢（Prefill 阶段耗时指数级上升）。
 
-## 3. RAG 核心架构：Spring AI + Vector Store
+**分块与重排 (Chunking & Rerank)**：
+1.  **Chunking**: 按语义切分文档（如 RecursiveCharacterTextSplitter）。
+2.  **Retrieval**: 召回 Top 50 个切片。
+3.  **Rerank**: 使用专门的 Rerank 模型（如 bge-reranker-v2）对这 50 个切片进行精细打分，选出最相关的 Top 5。
+Rerank 模型虽然慢，但精度极高，能显著减少喂给 LLM 的噪音，提升最终回答的准确率。
 
-为了让 AI 理解政策文件，我们需要搭建 RAG 链路。
-
-### 3.1 架构图
-`公文PDF` -> `ETL(文本提取)` -> `Embedding(向量化)` -> `Milvus(向量库)` -> `检索(Search)` -> `LLM(DeepSeek)` -> `答案`
-
-### 3.2 向量数据库选型
-在政务场景下，通常推荐使用 **Milvus** 或 **PostgreSQL (pgvector)**。
-这里以 Milvus 为例，它支持分布式部署，稳定性高。
-
-### 3.3 代码实现 (Spring AI)
-
-首先，配置 Spring AI 连接本地 Ollama：
-```yaml
-spring:
-  ai:
-    ollama:
-      base-url: http://localhost:11434
-      chat:
-        model: deepseek-coder:6.7b
-```
-
-然后，实现文档向量化（Embedding）：
-```java
-// 使用 Spring AI 的 VectorStore 抽象
-@Autowired
-VectorStore vectorStore;
-
-public void ingestDocs(List<File> policyFiles) {
-    for (File file : policyFiles) {
-        // 1. 读取 Tika/PDFBox 解析文本
-        Document doc = new Document(parsePdf(file));
-        // 2. 存入向量库（自动调用 Embedding 模型）
-        vectorStore.add(List.of(doc));
-    }
-}
-```
-*注意*：Embedding 模型也必须本地化！推荐使用 `m3e-base` (Moka Massive Mixed Embedding)，它是目前中文语义匹配效果最好的开源模型之一，同样可以通过 Ollama 或 ONNX 运行。
-
-### 3.4 问答服务
-```java
-public String askPolicy(String question) {
-    // 1. 检索相似文档
-    List<Document> similarDocs = vectorStore.similaritySearch(
-        SearchRequest.query(question).withTopK(3)
-    );
-    
-    // 2. 构建提示词
-    String context = similarDocs.stream().map(Document::getContent).collect(Collectors.joining("\n"));
-    String prompt = "基于以下政策文件内容回答问题，不要通过互联网检索：\n" + context + "\n问题：" + question;
-    
-    // 3. 调用本地 DeepSeek
-    return chatClient.call(prompt);
-}
-```
-
-## 4. 常见的优化策略
-
-1.  **PDF 表格解析**: 政务公文中包含大量表格，普通的 PDF 解析器会乱码。建议使用 **OCR** (如 PaddleOCR) 专门处理表格区域。
-2.  **切片策略**: 简单的按字符切分会打断语义。建议按“章节”或“条款”切分（正则匹配 `第一条`、`1.1` 等）。
-3.  **幻觉控制**: 在 Prompt 中明确约束：“如果文件中没有提到，请直接回答‘文件中未查询到相关规定’，严禁编造。”
+## 4. Spring AI 的底层抽象
+Spring AI 屏蔽了不同 Vector Store 的差异。它通过 `Document` 对象统一封装了 `Content` (文本) 和 `Metadata` (元数据)。
+**Function Calling 实现**：
+当模型觉得需要查数据库时，它会输出一个特定的 JSON。Spring AI 解析这个 JSON，反射调用本地 Java Bean 的方法，拿到结果后再塞回给 LLM。这个过程对业务代码是透明的，体现了 Agent 的雏形。
 
 ## 总结
-通过 **DeepSeek (推理)** + **M3E (向量)** + **Milvus (存储)** + **Spring AI (编排)**，我们成功在政务内网构建了一套完全私有化的政策问答助手。数据全程不落地，既满足了安全合规，又提升了办公效率。
+构建私有化 AI 知识库，本质上是在做 **Time-Space Trade-off**。
+我们用量化技术牺牲一点精度换取显存空间，用 HNSW 牺牲内存换取检索时间。
+理解这些底层算法的边界，才能设计出既快又准的 RAG 系统。

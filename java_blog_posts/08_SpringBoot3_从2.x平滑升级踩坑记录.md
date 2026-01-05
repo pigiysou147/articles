@@ -1,52 +1,59 @@
-# Spring Boot 3：从 2.x 平滑升级踩坑记录
+# Spring Boot 3：AOT 编译与 GraalVM 的技术内幕
 
 ## 背景
-Spring Boot 3.0 基于 Spring Framework 6.0，是新一代的 Java 开发标准。虽然新特性很诱人（AOT 编译、虚拟线程支持等），但升级过程可谓“步步惊心”。
-将一个 Spring Boot 2.7 的老项目升级到 3.1 时，通常会遇到以下核心坑点。
+Spring Boot 3.0 的发布标志着 Java 生态进入了 Cloud Native 的新纪元。最引人注目的特性莫过于对 **GraalVM Native Image** 的正式支持。
+从 JVM 的 JIT (Just-In-Time) 到 Native 的 AOT (Ahead-Of-Time)，这不仅仅是启动速度的提升，更是 Java 运行机制的根本性变革。
 
-## 1. 基础环境升级
-Spring Boot 3 最硬性的要求：**Java 17+**。
-如果你还在用 Java 8，必须先升级 JDK。
-- **Jakarta EE 迁移**：这是最大的工作量。
-  `javax.*` 包名全部改为了 `jakarta.*`。
-  - `javax.servlet` -> `jakarta.servlet`
-  - `javax.persistence` -> `jakarta.persistence`
-  *   *操作*：IDEA 全局替换，但要注意 `javax.sql` 等 JDK 自带的包不能换。
+## 1. 为什么 AOT 启动这么快？
+传统 JVM 启动时，需要：
+1.  加载 JVM 运行时（庞大）。
+2.  加载 Class 文件，验证字节码。
+3.  解释执行字节码。
+4.  C1/C2 编译器（JIT）根据热点探测，将字节码编译为机器码。
 
-## 2. 依赖库的不兼容
-很多老牌库还没发布适配 Jakarta EE 的版本。
-- **MySQL Driver**: 建议升级到 `com.mysql:mysql-connector-j`。
-- **Swagger/SpringFox**: SpringFox 已经死透了，**必须** 迁移到 `SpringDoc`。
-  ```xml
-  <dependency>
-      <groupId>org.springdoc</groupId>
-      <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-      <version>2.2.0</version>
-  </dependency>
-  ```
-- **Redis**: 底层 jedis/lettuce 版本变动，建议直接依赖 `spring-boot-starter-data-redis` 管理版本。
+**AOT (GraalVM)** 则是在构建阶段（Build Time）：
+1.  **静态分析**: 从 Main 方法开始，扫描所有可达的代码路径。
+2.  **堆快照 (Heap Snapshot)**: 将静态变量、常量池直接写入可执行文件的 Data 段。
+3.  **预编译**: 直接生成特定 CPU 架构的机器码。
 
-## 3. 配置项变更
-`application.yml` 里很多配置 key 变了。
-- `spring.redis.*` -> `spring.data.redis.*`
-- 这是一个非常繁琐的过程，推荐使用 **Spring Boot Migrator (SBM)** 工具，或者引入 `spring-boot-properties-migrator` 依赖，它会在启动时打印出过期的配置提示。
+结果：应用启动时，几乎没有“初始化”过程，直接映射内存并执行机器码。启动时间从秒级缩短到 **毫秒级**。
 
-## 4. 核心代码改动
-- **Spring Security 6.0**: 变化巨大。
-  `WebSecurityConfigurerAdapter` 被移除。
-  现在需要定义 `SecurityFilterChain` Bean。
-  ```java
-  @Bean
-  public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-      http
-          .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
-          .httpBasic(withDefaults());
-      return http.build();
-  }
-  ```
-- **URL 匹配**: 默认不再支持尾部斜杠匹配（`/api/users` 和 `/api/users/` 被视为不同）。
+## 2. 踩坑记录：动态性的代价
+Java 的强大在于动态性（反射、动态代理、序列化），但这正是 AOT 的噩梦。静态分析无法推断运行时的动态调用。
+
+### 2.1 反射与 Hints
+如果使用了 `Class.forName("com.mysql.cj.jdbc.Driver")`，GraalVM 在编译时不知道这个类会被用到，会把它由“摇树优化 (Tree Shaking)”剔除。
+**解决方案**：Spring Boot 3 引入了 **Runtime Hints API**。
+```java
+public class MyHints implements RuntimeHintsRegistrar {
+    @Override
+    public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
+        hints.reflection().registerType(MyEntity.class, MemberCategory.DECLARED_FIELDS);
+    }
+}
+```
+Spring 框架内部已经为大多数标准库注册了 Hints，但对于第三方库或自己的反射代码，必须手动注册，否则运行时报 `ClassNotFoundException`。
+
+### 2.2 CGLIB vs JDK Proxy
+Spring AOP 默认使用 CGLIB（字节码生成）。但在 Native Image 中，动态生成字节码是不被支持的（或者非常受限）。
+Spring Boot 3 倾向于在 AOT 处理阶段生成代理类。这意味着如果你的 Bean 没有实现接口，Spring 需要在编译期就生成子类。这要求开发者对 Bean 的定义更加规范。
+
+## 3. 可观测性：Micrometer Tracing
+Spring Boot 3 移除了 Spring Cloud Sleuth，全面拥抱 **Micrometer Tracing**。
+这不仅仅是改名，而是基于 **Observation API** 的重构。
+
+```java
+Observation.createNotStarted("my.operation", registry)
+    .lowCardinalityKeyValue("user.type", "vip")
+    .observe(() -> {
+        // 业务逻辑
+    });
+```
+**技术细节**：
+Observation API 将 **Metrics** (Timer, Counter) 和 **Tracing** (Span) 统一了。
+当你开启一个 Observation，它会自动开启一个 Trace Span，并在结束时记录 Metric。这种统一模型大大降低了在代码中埋点的复杂度，同时保证了监控和链路追踪数据的一致性。
 
 ## 总结
-升级 Spring Boot 3 是大势所趋，不仅为了新特性，更为了安全性。
-建议路线：Java 8 -> Java 17 -> Spring Boot 2.7 -> Spring Boot 3.x。
-先解决 Jakarta EE 的包名问题，再逐步攻克第三方依赖。
+升级 Spring Boot 3 不仅仅是为了跟风。
+理解 AOT 的**封闭世界假设 (Closed World Assumption)**，理解 Observation API 的**统一观测模型**，有助于我们编写出更规范、更云原生友好的 Java 代码。
+Java 正在变“轻”，而我们需要变“强”。

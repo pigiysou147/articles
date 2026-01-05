@@ -1,102 +1,56 @@
-# AI 国产化：Spring AI 接入通义千问/文心一言实战
+# AI 进阶：Spring AI 的抽象哲学与 Function Calling 原理
 
 ## 背景
-随着 Spring AI 的发布，Java 终于有了官方的 AI 应用开发框架。但官方原生主要支持 OpenAI、Azure 等海外模型。
-在国内政务和信创项目中，通常要求对接国产大模型，如**阿里通义千问 (Qwen)** 或 **百度文心一言 (Ernie)**。
-好消息是，Spring AI Alibaba 等社区项目已经跟进，让我们能以标准化的方式接入国产模型。
+在对接大模型时，我们很容易陷入具体的 API 细节中：OpenAI 的 JSON 结构、通义千问的 HTTP 头、文心一言的签名算法。
+**Spring AI** 的核心价值在于 **Portable API**。它不仅屏蔽了异构模型的差异，还通过高层抽象实现了 **Function Calling (工具调用)** 的标准化。
 
-## 1. 选型：Spring AI Alibaba
-Spring AI Alibaba 是基于 Spring AI 规范实现的，专门适配阿里云通义大模型（Qwen）。
-它保持了 API 的统一性，这意味着你现在的代码，未来可以零成本切换到其他模型（如 DeepSeek 或 Claude）。
+## 1. 核心抽象：ChatModel 与 Prompts
+Spring AI 的设计灵感来源于 JDBC。
+*   `ChatClient` $\approx$ `JdbcTemplate`
+*   `Prompt` $\approx$ `SQL Statement`
+*   `ChatResponse` $\approx$ `ResultSet`
 
-## 2. 快速接入通义千问
+这种设计允许开发者在不修改业务代码的情况下，通过更改配置（YAML）从 OpenAI 切换到 Qwen 或 Ollama。这对于信创项目至关重要。
 
-### 2.1 依赖引入
-需要引入 Spring AI Alibaba 的 Starter：
-```xml
-<dependency>
-    <groupId>com.alibaba.cloud.ai</groupId>
-    <artifactId>spring-ai-alibaba-starter</artifactId>
-    <version>1.0.0-M1</version>
-</dependency>
-```
+## 2. Function Calling：让 AI 拥有“手”
+大模型本身是封闭的。Function Calling 允许 AI 在需要时“回调”我们的 Java 代码（比如查询天气、查数据库）。
 
-### 2.2 配置 API Key
-在 `application.yml` 中配置：
-```yaml
-spring:
-  ai:
-    alibaba:
-      qwen:
-        api-key: ${ALI_AI_API_KEY} # 建议放在环境变量中
-        model: qwen-plus # 推荐使用 plus 或 max 版本
-```
+### 2.1 原理剖析
+1.  **Schema 生成**: Spring AI 会扫描注册的 Java Bean（实现了 `java.util.function.Function`），利用反射分析其入参类型，生成 **JSON Schema**。
+2.  **Prompt 注入**: 在发送给 LLM 的请求中，Spring AI 会自动附带 `tools` 字段，包含上述 Schema。
+    ```json
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "getCurrentWeather",
+        "parameters": { "type": "object", "properties": { "location": ... } }
+      }
+    }]
+    ```
+3.  **LLM 决策**: LLM 分析用户问题（"北京天气如何？"），发现需要调用工具，于是返回一个特殊的 `tool_calls` 响应，而不是普通文本。
+4.  **反射执行**: Spring AI 拦截到这个响应，提取函数名和参数，反射调用 Java 方法。
+5.  **递归调用**: 拿到 Java 方法的返回值（"25度"），Spring AI 再次将其作为 Context 发送给 LLM，LLM 最终生成自然语言回答。
 
-### 2.3 业务代码
-完全不需要改动 Spring AI 的原生接口！
+### 2.2 实战代码
 ```java
-@RestController
-@RequestMapping("/ai")
-public class GovAssistantController {
-
-    private final ChatClient chatClient;
-
-    public GovAssistantController(ChatClient.Builder builder) {
-        this.chatClient = builder.build();
-    }
-
-    @GetMapping("/draft")
-    public String draftDocument(@RequestParam String topic) {
-        return chatClient.prompt()
-                .user("请帮我起草一份关于" + topic + "的政务通知，要求格式规范，语气严肃。")
-                .call()
-                .content();
+@Configuration
+public class ToolsConfig {
+    @Bean
+    @Description("查询某地的天气情况") // 这个描述会被 AI 看到，非常重要！
+    public Function<WeatherRequest, WeatherResponse> weatherFunction() {
+        return request -> weatherService.query(request.location());
     }
 }
 ```
+我们只需要写标准的 Java Function，Spring AI 负责所有的协议转换和反射调用。
 
-## 3. 对接百度文心一言 (Ernie Bot)
-如果需要使用百度文心一言，虽然目前没有官方 Starter，但我们可以利用 Spring AI 的 **OpenAI 兼容模式**，或者自定义 `ChatModel`。
-目前文心一言推出了兼容 OpenAI 协议的接口（千帆平台），这让接入变得异常简单。
+## 3. 国产模型的适配挑战
+虽然 Spring AI 抽象得很好，但国产模型的 Function Calling 实现参差不齐。
+*   **通义千问 (Qwen)**: 对 OpenAI 格式支持较好，JSON 输出稳定。
+*   **文心一言**: 早期的 Function Calling 协议比较独特，但在 4.0 版本后趋于标准。
 
-### 3.1 配置 Base URL
-```yaml
-spring:
-  ai:
-    openai:
-      base-url: https://qianfan.baidubce.com/v2/ # 百度千帆兼容端点
-      api-key: ${QIANFAN_API_KEY}
-```
-*注意*：部分参数可能不支持，需要详细查阅千帆文档。
+在使用 Spring AI Alibaba 时，底层依然依赖于 JSON Schema 的准确性。建议在定义 Java Bean 时，使用 `@JsonPropertyDescription` 详细描述每个字段的用途，这能显著提高 AI 调用工具的成功率。
 
-## 4. 政务场景下的 Prompt 工程技巧
-
-国产模型对中文语境的理解通常优于 GPT-3.5，但在政务场景下，仍需精细化调优 Prompt。
-
-### 4.1 角色设定 (Role Playing)
-```java
-String systemPrompt = """
-你是一名经验丰富的政府办公厅秘书。
-你的任务是辅助起草公文。
-你的输出必须遵循《党政机关公文处理工作条例》格式。
-严禁使用口语化表达。
-""";
-```
-
-### 4.2 结构化输出
-公文处理常需要提取关键信息（如时间、地点、责任人）。
-使用 `BeanOutputParser` 让模型直接返回 JSON。
-```java
-record MeetingSummary(String date, String location, List<String> attendees, String content) {}
-
-BeanOutputParser<MeetingSummary> parser = new BeanOutputParser<>(MeetingSummary.class);
-String prompt = "分析以下会议记录..." + parser.getFormat();
-```
-国产模型（尤其是 Qwen-Max）在遵循 JSON 格式指令方面表现非常出色。
-
-## 5. 总结
-Spring AI 的出现屏蔽了底层模型的差异。在信创背景下，我们可以灵活切换通义千问、文心一言甚至私有化模型。
-**核心建议**：
-1. 首选 **Spring AI Alibaba** 对接通义系列，生态支持最好。
-2. 充分利用 Spring AI 的 **抽象接口**，避免代码与具体模型绑定。
-3. 针对国产模型特性调整 Prompt，特别是**公文格式**的约束。
+## 总结
+Spring AI 不仅仅是一个 HTTP 客户端包装器。它通过精妙的抽象，将 **Prompt Engineering** 和 **Function Calling** 变成了标准的 Java 开发范式。
+理解其背后的反射机制和 JSON Schema 生成逻辑，能让我们更自如地驾驭 AI Agent 的开发。
