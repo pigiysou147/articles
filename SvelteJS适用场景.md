@@ -2,6 +2,20 @@
 
 SvelteJS 是一种构建 Web 用户界面的激进的新方法。与 React 和 Vue 等传统框架不同，Svelte 没有虚拟 DOM，它将大部分工作放到构建步骤（编译时）进行，而不是在浏览器中（运行时）进行。
 
+## Svelte 的核心机制：编译器 (The Compiler)
+Svelte 的核心不仅仅是一个 UI 库，而是一个 **编译器**。
+
+1.  **编译时 (Compile Time) vs 运行时 (Run Time)**
+    *   **React/Vue**: 在浏览器中运行大量代码来计算差异（Diff）并更新 DOM。
+    *   **Svelte**: 在构建阶段（Build time）将你的代码编译成高效的、不依赖框架的原生 JavaScript 代码。
+
+2.  **响应式赋值 (Reactive Assignments)**
+    *   Svelte 通过分析代码中的赋值语句（`=`），自动生成更新 DOM 的指令。它不需要复杂的代理（Proxies）或钩子（Hooks）。
+    *   核心语法 `$: ` (Labeled Statement) 用于声明派生状态，编译器会对其进行**拓扑排序**，确保依赖关系正确执行。
+
+3.  **外科手术式的更新 (Surgical Updates)**
+    *   由于没有虚拟 DOM，Svelte 能够精确地知道哪个变量的变化会影响哪个 DOM 节点。当状态改变时，它直接修改对应的 DOM 节点，就像手动写原生 JS 一样高效。
+
 以下是 SvelteJS 的主要适用场景：
 
 ## 1. 高性能 Web 应用
