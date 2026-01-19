@@ -2,6 +2,21 @@
 
 SvelteJS 是一种构建 Web 用户界面的激进的新方法。与 React 和 Vue 等传统框架不同，Svelte 没有虚拟 DOM，它将大部分工作放到构建步骤（编译时）进行，而不是在浏览器中（运行时）进行。
 
+## Svelte 的核心理念 (Core Philosophy)
+Svelte 的设计不仅仅是为了性能，更是为了改善开发者的体验。其核心理念可以概括为以下几点：
+
+1.  **代码即负担 (Code is Liability)**
+    *   Svelte 认为代码写得越少，Bug 就越少，加载速度也越快。
+    *   它的目标是让你用最少的代码实现功能，减少“样板代码”（Boilerplate）。
+
+2.  **虚拟 DOM 是纯粹的开销 (Virtual DOM is pure overhead)**
+    *   传统框架认为 Virtual DOM 足够快，但 Svelte 认为**不进行 Diff** 才是最快的。
+    *   通过将工作提前到编译阶段，Svelte 省去了运行时复杂的 Diff 计算。
+
+3.  **重思响应式 (Rethinking Reactivity)**
+    *   响应式不应该是一个需要调用的 API（如 `this.setState` 或 `useState`），而应该是语言本身的一部分。
+    *   Svelte 通过扩展 JavaScript 语法（如 `let count = 0` 即响应式），让状态管理回归直觉。
+
 ## Svelte 的核心机制：编译器 (The Compiler)
 Svelte 的核心不仅仅是一个 UI 库，而是一个 **编译器**。
 
